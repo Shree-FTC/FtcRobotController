@@ -20,6 +20,8 @@ public class SimpleTele extends LinearOpMode {
     private CRServo torqueServo2 = null;
     private boolean shooterOn = false;
     private boolean bPressedLastLoop = false;
+    private boolean servosOn = false;
+    private boolean aPressedLastLoop = false;
 
     @Override
     public void runOpMode() {
@@ -80,14 +82,15 @@ public class SimpleTele extends LinearOpMode {
             backLeft.setPower(blPower);
             backRight.setPower(brPower);
 
-            speedServo1.setPower(-1);
-            torqueServo1.setPower(-1);
-            speedServo2.setPower(1);
-            torqueServo2.setPower(1);
+
 
             boolean bPressedNow = gamepad2.b;
             if (bPressedNow && !bPressedLastLoop) {
                 shooterOn = !shooterOn;
+            }
+            boolean aPressedNow = gamepad2.a;
+            if (aPressedNow && !aPressedLastLoop) {
+                servosOn = !servosOn;
             }
             bPressedLastLoop = bPressedNow;
 
@@ -95,6 +98,17 @@ public class SimpleTele extends LinearOpMode {
                 shooter.setPower(1);
             } else {
                 shooter.setPower(0);
+            }
+            if (servosOn) {
+                speedServo1.setPower(1);
+                torqueServo1.setPower(1);
+                speedServo2.setPower(1);
+                torqueServo2.setPower(1);
+            } else {
+                speedServo1.setPower(0);
+                torqueServo1.setPower(0);
+                speedServo2.setPower(0);
+                torqueServo2.setPower(0);
             }
 
         }
