@@ -1,250 +1,424 @@
 package org.firstinspires.ftc.teamcode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.Servo;
+import com.qualcomm.robotcore.hardware.CRServo;
 import com.qualcomm.robotcore.hardware.ColorSensor;
-import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
-import org.firstinspires.ftc.vision.VisionPortal;
-import org.firstinspires.ftc.teamcode.MyTargetProcessor;
+import com.qualcomm.robotcore.hardware.ServoController;
+import com.qualcomm.robotcore.util.ElapsedTime;
 
 @TeleOp(name="MecanumTurretTeleOp4", group="Main")
 public class MecanumTurretTeleOp4 extends LinearOpMode {
 
-    // --- Hardware ---
-    DcMotor frontLeft, frontRight, backLeft, backRight;
-    Servo turretServo;
-    DcMotor shooter;
-    DcMotor rollerMotor;
+    // Drive motors
+    private DcMotor frontLeft, frontRight, backLeft, backRight;
 
-    // sorter
-    Servo sortWheel;
-    Servo kicker1, kicker2, kicker3;
-    ColorSensor cs;
+    // Shooter / intake / sorter
+    private DcMotor shooter, rollerMotor;
+    private Servo sortWheel, kicker;
 
-    // Vision
-    private VisionPortal visionPortal;
+    // Turret CRServos
+    private CRServo turretYaw, turretPitch;
+
+    // Color sensor
+    private ColorSensor cs;
+
+    // Auto-aim state
+    private boolean autoAimEnabled = false;
+    private boolean autoAimButtonPressed = false;
+    private boolean autoAimLocked = false;
+
+    // Shooter toggle state
+    private boolean shooterOn = false;
+    private boolean shooterButtonPressed = false;
+
+    // Intake toggle state
+    private boolean intakeOn = false;
+    private boolean intakeButtonPressed = false;
+
+    // Motif scan toggle
+    private boolean motifScanRequested = false;
+    private boolean motifButtonPressed = false;
+
+    // Shooter state machine
+    private enum ShooterState { IDLE, SPINUP, POP_UP, POP_DOWN, BETWEEN_SHOTS, DONE }
+    private ShooterState shooterState = ShooterState.IDLE;
+    private int shooterShotsFired = 0;
+    private final int SHOOTER_SHOT_COUNT = 3;
+    private final double SPINUP_DURATION = 0.25;
+    private final double POP_UP_DURATION = 0.30;
+    private final double POP_DOWN_DURATION = 0.20;
+    private ElapsedTime shooterTimer = new ElapsedTime();
+
+    // Indexer (non-blocking pulses)
+    private ElapsedTime indexerTimer = new ElapsedTime();
+    private boolean indexerPulsePending = false;
+    private final double INDEXER_PULSE_MS = 0.05;
+
+    // Arm constants
+    private final double ARM_REST_POS = 0.05;
+    private final double ARM_UP_DELTA = 60.0 / 180.0;
+    private final double ARM_UP_POS = clamp(ARM_REST_POS + ARM_UP_DELTA, 0.0, 1.0);
+    private final double ARM_IDLE_DRIFT = 0.005;
+
+    // Shooter power
+    private final double SHOOTER_POWER_MIN = 0.6;
+    private final double SHOOTER_POWER_MAX = 1.0;
+
+    // Camera / auto-aim parameters
+    private final double CAMERA_HFOV_DEG = 120.0;
+
+    // Turret virtual angles (degrees)
+    private double turretYawAngleDeg = 0.0;
+    private double turretPitchAngleDeg = 0.0;
+    private final double YAW_DEG_PER_SEC_AT_FULL_POWER = 120.0;
+    private final double PITCH_DEG_PER_SEC_AT_FULL_POWER = 90.0;
+
+    // Vision processor (user-provided)
     private MyTargetProcessor targetProcessor;
 
-    // Turret
-    private double turretPos = 0.5;
-    private static final double CAMERA_HFOV_DEG = 60.0;
-    private static final double PARALLAX_CORRECTION_DEG = 4.5;
-
-    // Sortwheel slots
-    private final double SLOT1_POS = 0.20;
-    private final double SLOT2_POS = 0.50;
-    private final double SLOT3_POS = 0.80;
-
-    // Kicker positions
-    private final double REST_POS = 0.0;
-    private final double FIRE_POS = 0.4;
-
-    // States
-    boolean shooterOn = false;
-    boolean shooterButtonPressed = false;
-
-    boolean intakeOn = false;
-    boolean intakeButtonPressed = false;
-
-    boolean autoAimMode = false;
-    boolean autoAimButtonPressed = false;
+    // Loop timer
+    private final ElapsedTime loopTimer = new ElapsedTime();
 
     @Override
-    public void runOpMode() throws InterruptedException {
+    public void runOpMode() {
 
-        // drive
-        frontLeft  = hardwareMap.dcMotor.get("frontLeft");
+        // =========================
+        // Hardware mapping
+        // =========================
+        frontLeft = hardwareMap.dcMotor.get("frontLeft");
         frontRight = hardwareMap.dcMotor.get("frontRight");
-        backLeft   = hardwareMap.dcMotor.get("backLeft");
-        backRight  = hardwareMap.dcMotor.get("backRight");
+        backLeft = hardwareMap.dcMotor.get("backLeft");
+        backRight = hardwareMap.dcMotor.get("backRight");
 
         shooter = hardwareMap.dcMotor.get("shooter");
         rollerMotor = hardwareMap.dcMotor.get("rollerMotor");
 
-        turretServo = hardwareMap.get(Servo.class, "turretServo");
+        sortWheel = hardwareMap.servo.get("sortWheel");
+        kicker = hardwareMap.servo.get("kicker");
 
-        sortWheel = hardwareMap.get(Servo.class, "sortWheel");
-        kicker1 = hardwareMap.get(Servo.class, "kicker1");
-        kicker2 = hardwareMap.get(Servo.class, "kicker2");
-        kicker3 = hardwareMap.get(Servo.class, "kicker3");
+        turretYaw = hardwareMap.get(CRServo.class, "turretYaw");
+        turretPitch = hardwareMap.get(CRServo.class, "turretPitch");
 
         cs = hardwareMap.get(ColorSensor.class, "cs");
 
-        // drive direction
-        frontRight.setDirection(DcMotor.Direction.REVERSE);
-        backRight.setDirection(DcMotor.Direction.REVERSE);
+        // Drivetrain reversed (back is front, left is right)
+        frontLeft.setDirection(DcMotor.Direction.REVERSE);
+        backLeft.setDirection(DcMotor.Direction.REVERSE);
+        frontRight.setDirection(DcMotor.Direction.FORWARD);
+        backRight.setDirection(DcMotor.Direction.FORWARD);
+        rollerMotor.setDirection(DcMotor.Direction.REVERSE);
 
-        kickersRest();
+        // Disable servos during INIT
+        ServoController kickerController = kicker.getController();
+        ServoController sortWheelController = sortWheel.getController();
+        ServoController pitchController = turretPitch.getController();
+        kickerController.pwmDisable();
+        sortWheelController.pwmDisable();
+        pitchController.pwmDisable();
 
-        // setup vision
-        targetProcessor = new MyTargetProcessor();
-        visionPortal = new VisionPortal.Builder()
-                .setCamera(hardwareMap.get(WebcamName.class, "webcam"))
-                .addProcessor(targetProcessor)
-                .build();
+        turretYawAngleDeg = 0;
+        turretPitchAngleDeg = 0;
 
-        turretServo.setPosition(turretPos);
+        telemetry.addLine("Ready - Servos DISABLED until START");
+        telemetry.update();
 
         waitForStart();
 
+        // Enable servos after start
+        kickerController.pwmEnable();
+        sortWheelController.pwmEnable();
+        pitchController.pwmEnable();
+
+        kicker.setDirection(Servo.Direction.REVERSE);
+        turretYaw.setPower(0);
+        turretPitch.setPower(0);
+        sortWheel.setPosition(0.5);
+        kicker.setPosition(ARM_REST_POS);
+
+        // Initialize vision processor
+        targetProcessor = new MyTargetProcessor();
+
+        loopTimer.reset();
+
         while (opModeIsActive()) {
+            double dt = loopTimer.seconds();
+            loopTimer.reset();
 
-            // Drive
-            double y  = -gamepad1.left_stick_y;
-            double x  = gamepad1.left_stick_x;
-            double rx = gamepad1.right_stick_x;
+            // =========================
+            // DRIVE CONTROLS (reversed)
+            // =========================
+            double y = gamepad2.left_stick_y;   // forward/backward reversed
+            double x = -gamepad2.left_stick_x;  // left/right reversed
+            double rx = -gamepad2.right_stick_x; // rotation reversed
 
-            frontLeft.setPower(y + x + rx);
-            frontRight.setPower(y - x - rx);
-            backLeft.setPower(y - x + rx);
-            backRight.setPower(y + x - rx);
+            frontLeft.setPower(clamp(y + x + rx, -1, 1));
+            frontRight.setPower(clamp(y - x - rx, -1, 1));
+            backLeft.setPower(clamp(y - x + rx, -1, 1));
+            backRight.setPower(clamp(y + x - rx, -1, 1));
 
-            // --- Auto aim toggle ---
-            if (gamepad2.y && !autoAimButtonPressed) {
-                autoAimMode = !autoAimMode;
+            // =========================
+            // AUTO-AIM TOGGLE
+            // =========================
+            if (gamepad2.x && !autoAimButtonPressed) {
+                autoAimEnabled = !autoAimEnabled;
                 autoAimButtonPressed = true;
             }
-            if (!gamepad2.y) autoAimButtonPressed = false;
+            if (!gamepad2.x) autoAimButtonPressed = false;
 
-            // turret
-            if (autoAimMode) {
-                autoAimTurret();
-            } else {
-                if (gamepad2.a) turretPos += 0.01;
-                if (gamepad2.left_bumper) turretPos -= 0.01;
-                turretPos = Math.max(0.0, Math.min(1.0, turretPos));
-                turretServo.setPosition(turretPos);
-            }
-
-            // shooter
+            // =========================
+            // SHOOTER TOGGLE
+            // =========================
             if (gamepad2.b && !shooterButtonPressed) {
                 shooterOn = !shooterOn;
                 shooterButtonPressed = true;
+                if (shooterOn && shooterState == ShooterState.IDLE) {
+                    shooterState = ShooterState.SPINUP;
+                    shooterShotsFired = 0;
+                    shooterTimer.reset();
+                }
             }
             if (!gamepad2.b) shooterButtonPressed = false;
 
-            shooter.setPower(shooterOn ? 1.0 : 0.0);
+            // =========================
+            // MOTIF SCAN (Y)
+            // =========================
+            if (gamepad2.y && !motifButtonPressed) {
+                motifScanRequested = true;
+                motifButtonPressed = true;
+            }
+            if (!gamepad2.y) motifButtonPressed = false;
 
-            // intake
-            if (gamepad2.x && !intakeButtonPressed) {
+            if (motifScanRequested) {
+                targetProcessor.scanMotif();
+                motifScanRequested = false;
+            }
+
+            // =========================
+            // INTAKE / SORTER
+            // =========================
+            if (gamepad2.a && !intakeButtonPressed) {
                 intakeOn = !intakeOn;
                 intakeButtonPressed = true;
             }
-            if (!gamepad2.x) intakeButtonPressed = false;
+            if (!gamepad2.a) intakeButtonPressed = false;
 
             rollerMotor.setPower(intakeOn ? 1.0 : 0.0);
+            if (intakeOn) triggerIndexerPulse();
 
-            // --- SORT & SHOOT ALL BALLS ---
-            if (gamepad2.dpad_up) {
-                sortAndShootAll();
+            // =========================
+            // AUTO-AIM / TURRET
+            // =========================
+            double computedShooterPower = SHOOTER_POWER_MAX;
+            autoAimLocked = false;
+
+            if (autoAimEnabled && targetProcessor.targetDetected()) {
+                computedShooterPower = autoAimTurretAndComputePowerWithParallax_NONBLOCKING(3.0, 120.0, dt);
+                autoAimLocked = Math.abs(turretYaw.getPower()) < 0.05 &&
+                        Math.abs(turretPitch.getPower()) < 0.05;
+
+                // Auto shoot immediately if in position
+                if (shooterOn && shooterState == ShooterState.IDLE && autoAimLocked) {
+                    shooterState = ShooterState.SPINUP;
+                    shooterShotsFired = 0;
+                    shooterTimer.reset();
+                }
+            } else {
+                // Manual turret control
+                double pitchPower = 0;
+                if (gamepad2.left_bumper) pitchPower = 0.6;
+                else if (gamepad2.right_bumper) pitchPower = -0.6;
+                turretPitch.setPower(pitchPower);
+
+                double yawPower = gamepad2.right_trigger - gamepad2.left_trigger;
+                turretYaw.setPower(clamp(yawPower * 0.6, -0.6, 0.6));
+
+                // Manual shoot if toggled ON
+                if (shooterOn && shooterState == ShooterState.IDLE) {
+                    shooterState = ShooterState.SPINUP;
+                    shooterShotsFired = 0;
+                    shooterTimer.reset();
+                }
             }
 
-            telemetry.addData("Shooter", shooterOn);
-            telemetry.addData("Intake", intakeOn);
-            telemetry.addData("AutoAim", autoAimMode);
-            telemetry.addData("Turret", turretPos);
+            // Stop turret if no input and auto-aim off
+            if (!autoAimEnabled && gamepad2.left_bumper == false && gamepad2.right_bumper == false &&
+                    gamepad2.left_trigger == 0 && gamepad2.right_trigger == 0) {
+                turretYaw.setPower(0);
+                turretPitch.setPower(0);
+            }
+
+            // Update virtual turret angles
+            turretYawAngleDeg += turretYaw.getPower() * YAW_DEG_PER_SEC_AT_FULL_POWER * dt;
+            turretPitchAngleDeg += turretPitch.getPower() * PITCH_DEG_PER_SEC_AT_FULL_POWER * dt;
+            turretYawAngleDeg = wrapAngleDeg(turretYawAngleDeg);
+
+            // =========================
+            // Update shooter and indexer
+            // =========================
+            updateShooterStateMachine();
+            updateIndexerStateMachine();
+            idleDriftArm();
+
+            // =========================
+            // Telemetry
+            // =========================
+            telemetry.addLine("=== Turret System ===");
+            telemetry.addData("AutoAim", autoAimEnabled ? "ON" : "OFF");
+            telemetry.addData("AutoAim Locked", autoAimLocked ? "YES" : "NO");
+            telemetry.addData("Turret Yaw Power", "%.2f", turretYaw.getPower());
+            telemetry.addData("Turret Pitch Power", "%.2f", turretPitch.getPower());
+            telemetry.addData("Turret Yaw Angle", "%.1f°", turretYawAngleDeg);
+            telemetry.addData("Turret Pitch Angle", "%.1f°", turretPitchAngleDeg);
+
+            telemetry.addLine("=== Intake / Shooter ===");
+            telemetry.addData("Intake", intakeOn ? "ON" : "OFF");
+            telemetry.addData("Shooter Toggle", shooterOn ? "ON" : "OFF");
+            telemetry.addData("Shooter State", shooterState.toString());
+            telemetry.addData("Shots Fired", shooterShotsFired);
+
+            telemetry.addLine("=== Sorter / Arm ===");
+            telemetry.addData("SortWheel Pos", "%.2f", sortWheel.getPosition());
+            telemetry.addData("Kicker Pos", "%.2f", kicker.getPosition());
+
+            telemetry.addLine("=== Motif ===");
+            telemetry.addData("Order", String.join(", ", targetProcessor.getMotifOrder()));
+
             telemetry.update();
         }
     }
 
-    // =========================================================
-    // AUTO AIM
-    // =========================================================
-    private void autoAimTurret() {
-        if (targetProcessor.targetDetected()) {
-            double targetPixelX = targetProcessor.getTargetX();
-            int cameraWidth = targetProcessor.cameraWidth;
+    // =========================
+    // Auto-aim helper
+    // =========================
+    private double autoAimTurretAndComputePowerWithParallax_NONBLOCKING(double cameraOffsetInches, double distanceToTargetInches, double dt) {
+        if (targetProcessor == null || !targetProcessor.targetDetected()) {
+            turretYaw.setPower(0);
+            turretPitch.setPower(0);
+            return SHOOTER_POWER_MAX;
+        }
 
-            double anglePerPixel = CAMERA_HFOV_DEG / cameraWidth;
-            double center = cameraWidth / 2.0;
+        double targetX = targetProcessor.getTargetX();
+        double targetY = targetProcessor.getTargetY();
+        int width = targetProcessor.cameraWidth;
+        int height = targetProcessor.cameraHeight;
 
-            double angleOffset = (targetPixelX - center) * anglePerPixel;
-            double finalAngle = angleOffset + PARALLAX_CORRECTION_DEG;
+        double centerX = width / 2.0;
+        double centerY = height / 2.0;
 
-            turretPos += finalAngle * 0.0005;
-            turretPos = Math.max(0.0, Math.min(1.0, turretPos));
+        double angleX = (targetX - centerX) * CAMERA_HFOV_DEG / width;
 
-            turretServo.setPosition(turretPos);
+        double hfovRad = Math.toRadians(CAMERA_HFOV_DEG);
+        double aspect = (double) width / height;
+        double vfovRad = 2.0 * Math.atan(Math.tan(hfovRad / 2.0) / aspect);
+        double vfovDeg = Math.toDegrees(vfovRad);
+
+        double angleY = (centerY - targetY) * vfovDeg / height;
+
+        double parallaxDeg = Math.toDegrees(Math.atan(cameraOffsetInches / distanceToTargetInches));
+        angleX += parallaxDeg;
+
+        double KpYaw = 0.02;
+        double KpPitch = 0.02;
+
+        turretYaw.setPower(clamp(angleX * KpYaw, -0.6, 0.6));
+        turretPitch.setPower(clamp(angleY * KpPitch, -0.6, 0.6));
+
+        double normalized = clamp(Math.abs(angleX) / (CAMERA_HFOV_DEG / 2.0), 0.0, 1.0);
+        return clamp(SHOOTER_POWER_MAX - normalized * (SHOOTER_POWER_MAX - SHOOTER_POWER_MIN), SHOOTER_POWER_MIN, SHOOTER_POWER_MAX);
+    }
+
+    // =========================
+    // Indexer
+    // =========================
+    private void triggerIndexerPulse() {
+        if (!indexerPulsePending) {
+            indexerPulsePending = true;
+            indexerTimer.reset();
+            sortWheel.setPosition(0.55);
         }
     }
 
-    // =========================================================
-    // SORTING + FIRING MECHANISM
-    // =========================================================
-
-    private String readBallColor() {
-        int r = cs.red();
-        int g = cs.green();
-
-        if (g > r) return "green";
-        return "purple";
-    }
-
-    private void moveToSlot(double pos) {
-        sortWheel.setPosition(pos);
-        sleep(300);
-    }
-
-    private void fire(Servo kicker) {
-        kicker.setPosition(FIRE_POS);
-        sleep(300);
-        kicker.setPosition(REST_POS);
-        sleep(200);
-    }
-
-    private void kickersRest() {
-        kicker1.setPosition(REST_POS);
-        kicker2.setPosition(REST_POS);
-        kicker3.setPosition(REST_POS);
-    }
-
-    private void sortAndShootAll() {
-
-        // ---- Step 1: Scan all 3 slots ----
-        moveToSlot(SLOT1_POS);
-        String c1 = readBallColor();
-
-        moveToSlot(SLOT2_POS);
-        String c2 = readBallColor();
-
-        moveToSlot(SLOT3_POS);
-        String c3 = readBallColor();
-
-        String[] colors = { c1, c2, c3 };
-
-        // ---- Step 2: Decide order ----
-        // Same logic as earlier example:
-        // green first then purple.
-        int[] order = new int[3];
-        int idx = 0;
-
-        // green balls first
-        for (int i = 0; i < 3; i++)
-            if (colors[i].equals("green"))
-                order[idx++] = i + 1;
-
-        // purple next
-        for (int i = 0; i < 3; i++)
-            if (colors[i].equals("purple"))
-                order[idx++] = i + 1;
-
-        // ---- Step 3: Fire in that order ----
-        for (int slot : order) {
-            switch (slot) {
-                case 1:
-                    moveToSlot(SLOT1_POS);
-                    fire(kicker1);
-                    break;
-                case 2:
-                    moveToSlot(SLOT2_POS);
-                    fire(kicker2);
-                    break;
-                case 3:
-                    moveToSlot(SLOT3_POS);
-                    fire(kicker3);
-                    break;
-            }
+    private void updateIndexerStateMachine() {
+        if (indexerPulsePending && indexerTimer.seconds() >= INDEXER_PULSE_MS) {
+            sortWheel.setPosition(0.5);
+            indexerPulsePending = false;
         }
+    }
+
+    // =========================
+    // Shooter
+    // =========================
+    private void updateShooterStateMachine() {
+        switch (shooterState) {
+            case IDLE:
+            case DONE:
+                shooter.setPower(0.0);
+                kicker.setPosition(ARM_REST_POS);
+                break;
+            case SPINUP:
+                shooter.setPower(SHOOTER_POWER_MAX);
+                if (shooterTimer.seconds() >= SPINUP_DURATION) {
+                    shooterState = ShooterState.POP_UP;
+                    kicker.setPosition(ARM_UP_POS);
+                    shooterTimer.reset();
+                }
+                break;
+            case POP_UP:
+                shooter.setPower(SHOOTER_POWER_MAX);
+                if (shooterTimer.seconds() >= POP_UP_DURATION) {
+                    kicker.setPosition(ARM_REST_POS);
+                    shooterState = ShooterState.POP_DOWN;
+                    shooterTimer.reset();
+                }
+                break;
+            case POP_DOWN:
+                shooter.setPower(SHOOTER_POWER_MAX);
+                if (shooterTimer.seconds() >= POP_DOWN_DURATION) {
+                    shooterShotsFired++;
+                    if (shooterShotsFired >= SHOOTER_SHOT_COUNT) {
+                        shooterState = ShooterState.DONE;
+                        shooter.setPower(0.0);
+                        kicker.setPosition(ARM_REST_POS);
+                        shooterTimer.reset();
+                    } else {
+                        shooterState = ShooterState.BETWEEN_SHOTS;
+                        shooterTimer.reset();
+                    }
+                }
+                break;
+            case BETWEEN_SHOTS:
+                shooter.setPower(SHOOTER_POWER_MAX);
+                if (shooterTimer.seconds() >= SPINUP_DURATION) {
+                    shooterState = ShooterState.POP_UP;
+                    kicker.setPosition(ARM_UP_POS);
+                    shooterTimer.reset();
+                }
+                break;
+        }
+    }
+
+    // =========================
+    // Arm idle drift
+    // =========================
+    private void idleDriftArm() {
+        double pos = kicker.getPosition();
+        kicker.setPosition(clamp(pos - ARM_IDLE_DRIFT * 0.5, 0.0, 1.0));
+    }
+
+    // =========================
+    // UTILITIES
+    // =========================
+    private static double clamp(double val, double min, double max) {
+        return Math.max(min, Math.min(max, val));
+    }
+
+    private static double wrapAngleDeg(double ang) {
+        double a = ang % 360.0;
+        if (a >= 180.0) a -= 360.0;
+        if (a < -180.0) a += 360.0;
+        return a;
     }
 }

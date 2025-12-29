@@ -9,8 +9,8 @@ import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
 import org.firstinspires.ftc.vision.VisionPortal;
 import org.firstinspires.ftc.teamcode.MyTargetProcessor;
 
-@Autonomous(name="AutoShootRedNS", group="Main")
-public class AutoShoot extends LinearOpMode {
+@Autonomous(name="MoveOneFoot3", group="Main")
+public class MoveOneFoot3 extends LinearOpMode {
 
     DcMotor frontLeft, frontRight, backLeft, backRight, rollerMotor;
     DcMotor shooter;
@@ -54,54 +54,14 @@ public class AutoShoot extends LinearOpMode {
                 .addProcessor(processor)
                 .build();
 
-        sortWheel.setPosition(0.5);
 
         telemetry.addLine("Auto Ready");
         telemetry.update();
 
         waitForStart();
 
-        driveInches(-48, 0.5);
-        sleep(300);
+        driveInches(48, 0.5);
 
-        if (processor.targetDetected()) autoAimTurret();
-
-        shooter.setPower(1.0);
-        sleep(1200);
-
-        fireKicker();
-        OneTwoZerodeg();
-        fireKicker();
-        OneTwoZerodeg();
-        fireKicker();
-        OneTwoZerodeg();
-
-        shooter.setPower(0);
-
-        turnDegrees(-45,0.4);
-        rollerMotor.setPower(1);
-        sixzero();
-        driveInches(24,0.5);
-        sleep(300);
-        driveInches(-24,0.5);
-        turnDegrees(45,0.4);
-
-        shooter.setPower(1);
-        sleep(300);
-
-        fireKicker();
-        OneTwoZerodeg();
-        fireKicker();
-        OneTwoZerodeg();
-        fireKicker();
-        OneTwoZerodeg();
-
-        rollerMotor.setPower(0);
-        shooter.setPower(0);
-
-        telemetry.addLine("AUTO COMPLETE");
-        telemetry.update();
-        sleep(2000);
     }
 
     private void driveInches(double inches, double power) {
@@ -168,57 +128,5 @@ public class AutoShoot extends LinearOpMode {
         frontRight.setPower(0);
         backLeft.setPower(0);
         backRight.setPower(0);
-    }
-
-    private void autoAimTurret() {
-        double targetX = processor.getTargetX();
-        double targetY = processor.getTargetY();
-        int width = processor.cameraWidth;
-        int height = processor.cameraHeight;
-
-        double cx = width / 2.0;
-        double cy = height / 2.0;
-
-        double angleX = (targetX - cx) * CAMERA_HFOV_DEG / width;
-        double angleY = (cy - targetY) * (CAMERA_HFOV_DEG * 9.0/16.0) / height;
-
-        double yawPower = angleX * 0.01;
-        double pitchPower = angleY * 0.01;
-
-        if (yawPower > 0.5) yawPower = 0.5;
-        if (yawPower < -0.5) yawPower = -0.5;
-        if (pitchPower > 0.5) pitchPower = 0.5;
-        if (pitchPower < -0.5) pitchPower = -0.5;
-
-        turretYaw.setPower(yawPower);
-        turretPitch.setPower(pitchPower);
-
-        sleep(150);
-
-        turretYaw.setPower(0);
-        turretPitch.setPower(0);
-    }
-
-    private void fireKicker() {
-        kicker.setPosition(1.0);
-        sleep(250);
-        kicker.setPosition(0.0);
-        sleep(350);
-    }
-
-    private void OneTwoZerodeg() {
-        sortWheel.setPosition(120.0 / 180.0);
-        sleep(240);
-        sortWheel.setPosition(0.5);
-    }
-
-    private void sixzero() {
-        sortWheel.setPosition(60.0 / 180.0);
-        sleep(120);
-        sortWheel.setPosition(0.5);
-    }
-}
-
-
-
+    }}
 

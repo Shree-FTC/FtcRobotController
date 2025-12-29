@@ -9,8 +9,8 @@ import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
 import org.firstinspires.ftc.vision.VisionPortal;
 import org.firstinspires.ftc.teamcode.MyTargetProcessor;
 
-@Autonomous(name="AutoShootRedNS", group="Main")
-public class AutoShoot extends LinearOpMode {
+@Autonomous(name="AutoShootBlue2NS", group="Main")
+public class AutoShoot3 extends LinearOpMode {
 
     DcMotor frontLeft, frontRight, backLeft, backRight, rollerMotor;
     DcMotor shooter;
@@ -78,13 +78,13 @@ public class AutoShoot extends LinearOpMode {
 
         shooter.setPower(0);
 
-        turnDegrees(-45,0.4);
+        turnDegrees(45,0.4);
         rollerMotor.setPower(1);
         sixzero();
         driveInches(24,0.5);
         sleep(300);
         driveInches(-24,0.5);
-        turnDegrees(45,0.4);
+        turnDegrees(-45,0.4);
 
         shooter.setPower(1);
         sleep(300);

@@ -9,7 +9,7 @@ import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
 import org.firstinspires.ftc.vision.VisionPortal;
 import org.firstinspires.ftc.teamcode.MyTargetProcessor;
 
-@Autonomous(name="AutoShootBlue", group="Main")
+@Autonomous(name="AutoShootBlueNS", group="Main")
 public class AutoShoot2 extends LinearOpMode {
 
     DcMotor frontLeft, frontRight, backLeft, backRight, rollerMotor;
@@ -45,6 +45,9 @@ public class AutoShoot2 extends LinearOpMode {
 
         frontRight.setDirection(DcMotor.Direction.REVERSE);
         backRight.setDirection(DcMotor.Direction.REVERSE);
+        kicker1.setDirection(Servo.Direction.REVERSE);
+        kicker2.setDirection(Servo.Direction.REVERSE);
+        kicker3.setDirection(Servo.Direction.REVERSE);
 
         shooter = hardwareMap.dcMotor.get("shooter");
 

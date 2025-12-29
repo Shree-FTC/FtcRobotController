@@ -2,15 +2,16 @@ package org.firstinspires.ftc.teamcode;
 
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.hardware.CRServo;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.Servo;
-import com.qualcomm.robotcore.hardware.CRServo;
+
 import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
 import org.firstinspires.ftc.vision.VisionPortal;
 import org.firstinspires.ftc.teamcode.MyTargetProcessor;
 
-@Autonomous(name="AutoShootRedNS", group="Main")
-public class AutoShoot extends LinearOpMode {
+@Autonomous(name="AutoShootBlueFS", group="Main")
+public class AutoShoot5 extends LinearOpMode {
 
     DcMotor frontLeft, frontRight, backLeft, backRight, rollerMotor;
     DcMotor shooter;
@@ -43,10 +44,12 @@ public class AutoShoot extends LinearOpMode {
         backRight.setDirection(DcMotor.Direction.REVERSE);
 
         shooter = hardwareMap.dcMotor.get("shooter");
+
         turretYaw = hardwareMap.get(CRServo.class, "turretYaw");
         turretPitch = hardwareMap.get(CRServo.class, "turretPitch");
-        kicker = hardwareMap.get(Servo.class, "kicker");
         sortWheel = hardwareMap.get(Servo.class, "sortWheel");
+        kicker = hardwareMap.get(Servo.class, "kicker");
+        kicker.setDirection(Servo.Direction.REVERSE);
 
         processor = new MyTargetProcessor();
         portal = new VisionPortal.Builder()
@@ -54,49 +57,31 @@ public class AutoShoot extends LinearOpMode {
                 .addProcessor(processor)
                 .build();
 
-        sortWheel.setPosition(0.5);
-
         telemetry.addLine("Auto Ready");
         telemetry.update();
 
         waitForStart();
 
-        driveInches(-48, 0.5);
+        driveInches(84, 0.5);
         sleep(300);
 
-        if (processor.targetDetected()) autoAimTurret();
+        turnDegrees(45,0.4);
+
+        if (processor.targetDetected()) {
+            autoAimTurret();
+        } else {
+            telemetry.addLine("NO TAG FOUND");
+            telemetry.update();
+        }
 
         shooter.setPower(1.0);
         sleep(1200);
-
-        fireKicker();
+        fireKicker(kicker);
         OneTwoZerodeg();
-        fireKicker();
+        fireKicker(kicker);
         OneTwoZerodeg();
-        fireKicker();
+        fireKicker(kicker);
         OneTwoZerodeg();
-
-        shooter.setPower(0);
-
-        turnDegrees(-45,0.4);
-        rollerMotor.setPower(1);
-        sixzero();
-        driveInches(24,0.5);
-        sleep(300);
-        driveInches(-24,0.5);
-        turnDegrees(45,0.4);
-
-        shooter.setPower(1);
-        sleep(300);
-
-        fireKicker();
-        OneTwoZerodeg();
-        fireKicker();
-        OneTwoZerodeg();
-        fireKicker();
-        OneTwoZerodeg();
-
-        rollerMotor.setPower(0);
         shooter.setPower(0);
 
         telemetry.addLine("AUTO COMPLETE");
@@ -129,7 +114,7 @@ public class AutoShoot extends LinearOpMode {
 
         while (opModeIsActive() &&
                 (frontLeft.isBusy() || frontRight.isBusy() ||
-                        backLeft.isBusy() || backRight.isBusy())) {}
+                        backLeft.isBusy() || backRight.isBusy())) { }
 
         frontLeft.setPower(0);
         frontRight.setPower(0);
@@ -162,7 +147,7 @@ public class AutoShoot extends LinearOpMode {
 
         while (opModeIsActive() &&
                 (frontLeft.isBusy() || frontRight.isBusy() ||
-                        backLeft.isBusy() || backRight.isBusy())) {}
+                        backLeft.isBusy() || backRight.isBusy())) { }
 
         frontLeft.setPower(0);
         frontRight.setPower(0);
@@ -171,54 +156,54 @@ public class AutoShoot extends LinearOpMode {
     }
 
     private void autoAimTurret() {
+        // Get target coordinates from vision processor
         double targetX = processor.getTargetX();
         double targetY = processor.getTargetY();
         int width = processor.cameraWidth;
         int height = processor.cameraHeight;
 
-        double cx = width / 2.0;
-        double cy = height / 2.0;
+        double centerX = width / 2.0;
+        double centerY = height / 2.0;
 
-        double angleX = (targetX - cx) * CAMERA_HFOV_DEG / width;
-        double angleY = (cy - targetY) * (CAMERA_HFOV_DEG * 9.0/16.0) / height;
+        // Compute offsets in degrees
+        double angleX = (targetX - centerX) * CAMERA_HFOV_DEG / width;
+        double angleY = (centerY - targetY) * (CAMERA_HFOV_DEG * 9.0 / 16.0) / height; // approx VFOV
 
         double yawPower = angleX * 0.01;
         double pitchPower = angleY * 0.01;
 
-        if (yawPower > 0.5) yawPower = 0.5;
-        if (yawPower < -0.5) yawPower = -0.5;
-        if (pitchPower > 0.5) pitchPower = 0.5;
-        if (pitchPower < -0.5) pitchPower = -0.5;
+        // Clamp CRServo power
+        yawPower = Math.max(-0.5, Math.min(0.5, yawPower));
+        pitchPower = Math.max(-0.5, Math.min(0.5, pitchPower));
 
         turretYaw.setPower(yawPower);
         turretPitch.setPower(pitchPower);
 
-        sleep(150);
+        sleep(200); // small adjustment window
 
         turretYaw.setPower(0);
         turretPitch.setPower(0);
     }
 
-    private void fireKicker() {
+    private void fireKicker(Servo kicker) {
         kicker.setPosition(1.0);
         sleep(250);
         kicker.setPosition(0.0);
         sleep(350);
     }
 
-    private void OneTwoZerodeg() {
+    private void OneTwoZerodeg(){
         sortWheel.setPosition(120.0 / 180.0);
         sleep(240);
         sortWheel.setPosition(0.5);
     }
 
-    private void sixzero() {
+    private void sixzero(){
         sortWheel.setPosition(60.0 / 180.0);
         sleep(120);
         sortWheel.setPosition(0.5);
     }
 }
-
 
 
 

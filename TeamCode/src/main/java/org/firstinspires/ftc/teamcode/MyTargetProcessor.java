@@ -6,6 +6,9 @@ import android.graphics.Paint;
 
 import org.firstinspires.ftc.robotcore.internal.camera.calibration.CameraCalibration;
 import org.firstinspires.ftc.vision.VisionProcessor;
+import org.firstinspires.ftc.vision.apriltag.AprilTagDetection;
+import org.firstinspires.ftc.vision.apriltag.AprilTagProcessor;
+
 import org.opencv.core.Core;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfPoint;
@@ -18,48 +21,72 @@ import java.util.List;
 
 public class MyTargetProcessor implements VisionProcessor {
 
+    // For color target
     private Mat hsv = new Mat();
     private Mat mask = new Mat();
     private Mat hierarchy = new Mat();
     private List<MatOfPoint> contours = new ArrayList<>();
     private volatile double targetX = 0.0;
+    private volatile double targetY = 0.0;
     private volatile boolean targetFound = false;
-    public int cameraWidth = 0; // Make this public so TeleOp can access it
 
-    // Define the color range for detection (Example: Red target in HSV)
+    public int cameraWidth = 0;
+    public int cameraHeight = 0;
+
+    // Color detection range (red HSV)
     private static final Scalar LOWER_BOUND = new Scalar(0, 100, 100);
     private static final Scalar UPPER_BOUND = new Scalar(10, 255, 255);
 
-    // --- Motif storage ---
-    private String[] motifOrder = {"green", "purple", "green"}; // default
+    // AprilTag Processor
+    private AprilTagProcessor tagProcessor;
+
+    // Store last seen tag ID
+    private volatile int lastDetectedTagId = -1;
+
+    // Motif ordering
+    private String[] motifOrder = {"green", "purple", "green"};
 
     @Override
     public void init(int width, int height, CameraCalibration calibration) {
         cameraWidth = width;
+        cameraHeight = height;
+
+        // Initialize AprilTag processor
+        tagProcessor = new AprilTagProcessor.Builder()
+                .setDrawTagID(true)
+                .setDrawTagOutline(true)
+                .setTagFamily(AprilTagProcessor.TagFamily.TAG_36h11)
+                .build();
     }
 
     @Override
     public Object processFrame(Mat frame, long captureTimeNanos) {
         contours.clear();
 
+        // ================================
+        //  Color Target Detection
+        // ================================
         Imgproc.cvtColor(frame, hsv, Imgproc.COLOR_RGB2HSV);
         Core.inRange(hsv, LOWER_BOUND, UPPER_BOUND, mask);
-        Imgproc.findContours(mask, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE);
+        Imgproc.findContours(mask, contours, hierarchy,
+                Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE);
 
         if (!contours.isEmpty()) {
-            MatOfPoint largestContour = contours.get(0);
+            MatOfPoint largest = contours.get(0);
             double maxArea = 0;
-            for (MatOfPoint contour : contours) {
-                double area = Imgproc.contourArea(contour);
+
+            for (MatOfPoint c : contours) {
+                double area = Imgproc.contourArea(c);
                 if (area > maxArea) {
                     maxArea = area;
-                    largestContour = contour;
+                    largest = c;
                 }
             }
 
-            if (maxArea > 100) { // Filter small noise
-                Rect boundingBox = Imgproc.boundingRect(largestContour);
-                targetX = boundingBox.x + (boundingBox.width / 2.0);
+            if (maxArea > 100) {
+                Rect box = Imgproc.boundingRect(largest);
+                targetX = box.x + box.width / 2.0;
+                targetY = box.y + box.height / 2.0;
                 targetFound = true;
             } else {
                 targetFound = false;
@@ -67,11 +94,27 @@ public class MyTargetProcessor implements VisionProcessor {
         } else {
             targetFound = false;
         }
+
+        // ================================
+        //  REAL AprilTag Detection
+        // ================================
+        List<AprilTagDetection> detections = tagProcessor.getDetections();
+
+        if (!detections.isEmpty()) {
+            AprilTagDetection tag = detections.get(0); // Take first tag
+            lastDetectedTagId = tag.id;
+
+            // Update motif order based on tag
+            updateMotifOrder(lastDetectedTagId);
+        }
+
         return frame;
     }
 
     @Override
-    public void onDrawFrame(Canvas canvas, int onscreenWidth, int onscreenHeight, float scaleBmpPxToCanvasPx, float scaleCanvasDensity, Object userContext) {
+    public void onDrawFrame(Canvas canvas, int onscreenWidth, int onscreenHeight,
+                            float scaleBmpPxToCanvasPx, float scaleCanvasDensity, Object userContext) {
+
         if (targetFound) {
             Paint paint = new Paint();
             paint.setColor(Color.GREEN);
@@ -79,26 +122,23 @@ public class MyTargetProcessor implements VisionProcessor {
             paint.setStrokeWidth(5);
 
             float scaledX = (float) (targetX * scaleBmpPxToCanvasPx);
-            canvas.drawCircle(scaledX, onscreenHeight / 2f, 20, paint);
+            float scaledY = (float) (targetY * scaleBmpPxToCanvasPx);
+
+            canvas.drawCircle(scaledX, scaledY, 20, paint);
         }
     }
 
     // =============================
-    // Existing methods
+    // Target Getters
     // =============================
-    public double getTargetX() {
-        return targetX;
-    }
-
-    public boolean targetDetected() {
-        return targetFound;
-    }
+    public double getTargetX() { return targetX; }
+    public double getTargetY() { return targetY; }
+    public boolean targetDetected() { return targetFound; }
 
     // =============================
-    // Motif methods
+    // Motif Methods
     // =============================
     public void updateMotifOrder(int tagId) {
-        // Example logic based on tag ID:
         switch (tagId) {
             case 1:
                 motifOrder = new String[]{"green", "purple", "purple"};
@@ -118,8 +158,18 @@ public class MyTargetProcessor implements VisionProcessor {
         return motifOrder;
     }
 
+    // =============================
+    // NEW: scanMotif method
+    // =============================
+    public void scanMotif() {
+        if (lastDetectedTagId != -1) {
+            updateMotifOrder(lastDetectedTagId);
+        }
+    }
+
+    // REAL tag getter
     public int getDetectedTagId() {
-        // Placeholder: implement actual AprilTag detection
-        return 1;
+        return lastDetectedTagId;
     }
 }
+
