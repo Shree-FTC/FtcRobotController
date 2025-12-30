@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode;
+package org.firstinspires.ftc.teamcode.Test_Folder;
 
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
@@ -27,7 +27,8 @@ public class KickerCalibration extends LinearOpMode {
     public void runOpMode() {
 
         // Hardware mapping
-        kicker = hardwareMap.servo.get("turretPitch");
+        kicker = hardwareMap.servo.get("kicker");
+        shooter = hardwareMap.dcMotor.get("shooter");
 
         // Start at first position
         kicker.setPosition(calibratedPositions[calibrationStep]);
