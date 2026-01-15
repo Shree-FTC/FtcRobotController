@@ -4,6 +4,8 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.Servo;
+import com.qualcomm.robotcore.hardware.ServoImplEx;
+import com.qualcomm.robotcore.hardware.PwmControl;
 import com.qualcomm.robotcore.hardware.ColorSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 import com.qualcomm.hardware.limelightvision.LLResult;
@@ -11,7 +13,7 @@ import com.qualcomm.hardware.limelightvision.LLResultTypes;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import java.util.List;
 
-@TeleOp(name="Auto-Aim Robot (Complete)", group="Competition")
+@TeleOp(name="AutoAimRobot", group="Competition")
 public class AutoAimRobot extends LinearOpMode {
 
     // Drive motors
@@ -23,29 +25,33 @@ public class AutoAimRobot extends LinearOpMode {
     private Servo kicker;
 
     // Sort wheel / Spindexer
-    private Servo sortWheel;
+    private ServoImplEx sortWheel;
     private ColorSensor cs;
 
     // Turret control
-    private Servo turretYaw;          // STANDARD SERVO (from AutoAimTest)
-    private DcMotor turretPitch;      // 312 RPM motor with encoder
+    private Servo turretYaw;
+    private DcMotor turretPitch;
 
     // Vision - Limelight 3A
     private Limelight3A limelight;
 
+    //
+    private double calculatedShooterPower = 0.65; // Better mid-range default
+    private double lastValidDistance = 72.0; // Store last good distance reading
+
     // ---------- STORAGE POSITIONS ----------
-    private static final double SLOT_0_POSITION = 0.25;      // 0 degrees - intake position
-    private static final double SLOT_1_POSITION = 0.6928;    // 120 degrees
-    private static final double SLOT_2_POSITION = 1.0;       // 240 degrees
+    private static final double SLOT_0_POSITION = 0.0;
+    private static final double SLOT_1_POSITION = 0.38;
+    private static final double SLOT_2_POSITION = 0.78;
 
     // ---------- SHOOTING POSITIONS ----------
-    private static final double SHOOT_POSITION_1 = 0.03;     // First ball shooting position
-    private static final double SHOOT_POSITION_2 = 0.4728;   // Second ball shooting position
-    private static final double SHOOT_POSITION_3 = 0.8961;   // Third ball shooting position
+    private static final double SHOOT_POSITION_0 = 0.57;
+    private static final double SHOOT_POSITION_1 = 0.96;
+    private static final double SHOOT_POSITION_2 = 0.1700;
 
     // ---------- KICKER POSITIONS ----------
     private static final double KICKER_OPEN = 0;
-    private static final double KICKER_CLOSED = 0.35;
+    private static final double KICKER_CLOSED = 0.38;
 
     // ---------- TURRET YAW SERVO TUNING ----------
     private static final double YAW_CENTER = 0.5;
@@ -65,11 +71,11 @@ public class AutoAimRobot extends LinearOpMode {
     private static final int COLOR_THRESHOLD = 80;
     private static final int MAX_BALLS = 3;
     private static final int DETECTION_COOLDOWN = 600;
-    private static final double INTAKE_POWER = 0.7;
+    private static final double INTAKE_POWER = 0.35;
     private static final int SERVO_MOVE_DELAY = 750;
 
     // ---------- BALL STORAGE ----------
-    private String[] ballSlots = new String[3]; // "Green", "Purple", or null
+    private String[] ballSlots = new String[3];
     private int currentSlot = 0;
     private int ballCount = 0;
 
@@ -103,18 +109,6 @@ public class AutoAimRobot extends LinearOpMode {
     public void runOpMode() {
         initHardware();
 
-        telemetry.addData("Status", "Initialized");
-        telemetry.addData("Controls", "A: Toggle Auto-Aim");
-        telemetry.addData("Controls", "B: Execute Shoot Sequence");
-        telemetry.addData("Controls", "X: Reset/Clear All Balls");
-        telemetry.addData("Controls", "Y: Manual Scan AprilTag Pattern");
-        telemetry.addData("Controls", "DPad Down: Toggle Shooter Motor");
-        telemetry.addData("Controls", "Right Trigger: Run Intake");
-        telemetry.addData("Controls", "Bumpers: Manual Yaw (when auto-aim off)");
-        telemetry.addData("Controls", "Triggers: Manual Pitch (when auto-aim off)");
-        telemetry.addData("Info", "Color sensor AUTO-DETECTS balls");
-        telemetry.update();
-
         waitForStart();
         runtime.reset();
 
@@ -128,6 +122,8 @@ public class AutoAimRobot extends LinearOpMode {
             // Toggle auto-aim with A button
             if (gamepad1.a && !lastAState) {
                 autoAimEnabled = !autoAimEnabled;
+                telemetry.addData("Auto-Aim", autoAimEnabled ? "ENABLED" : "DISABLED");
+                telemetry.update();
             }
             lastAState = gamepad1.a;
 
@@ -141,7 +137,7 @@ public class AutoAimRobot extends LinearOpMode {
             // Control intake motor with right trigger
             controlRoller();
 
-            // Continuously monitor color sensor and auto-rotate (only if intake is enabled)
+            // Continuously monitor color sensor and auto-rotate
             if (!isShooting && intakeEnabled) {
                 autoDetectAndRotate();
             }
@@ -153,30 +149,29 @@ public class AutoAimRobot extends LinearOpMode {
             }
             lastYState = gamepad1.y;
 
-            // Toggle Shooter Motor with DPad Down
+            //Toggle Shooter Motor with DPad Down
             if (gamepad1.dpad_down && !lastDpadDownState) {
                 shooterEnabled = !shooterEnabled;
-                if (shooterEnabled && !isShooting) {
-                    shooter.setPower(0.8);
-                } else if (!autoAimEnabled && !isShooting) {
+                if (shooterEnabled) {
+                    shooter.setPower(calculatedShooterPower);
+                    telemetry.addData("Shooter", "ENABLED at %.3f power", calculatedShooterPower);
+                } else if (!isShooting) {
                     shooter.setPower(0);
+                    telemetry.addData("Shooter", "DISABLED");
                 }
+                telemetry.update();
             }
             lastDpadDownState = gamepad1.dpad_down;
 
             // Shoot sequence with B button
             boolean currentBState = gamepad1.b;
             if (currentBState && !lastBState && !isShooting) {
-                if (targetPattern != null && ballCount == MAX_BALLS) {
-                    executeShootSequence();
-                } else if (targetPattern == null) {
-                    telemetry.addData("Error", "No target pattern! Press Y to scan AprilTag");
-                    telemetry.update();
-                    sleep(750);
-                } else if (ballCount < MAX_BALLS) {
+                if (ballCount < MAX_BALLS) {
                     telemetry.addData("Error", "Not enough balls! Have " + ballCount + ", need " + MAX_BALLS);
                     telemetry.update();
                     sleep(750);
+                } else {
+                    executeShootSequence();
                 }
             }
             lastBState = currentBState;
@@ -188,7 +183,11 @@ public class AutoAimRobot extends LinearOpMode {
             }
             lastXState = currentXState;
 
-            updateTelemetry();
+            // ✅ ADDED: Display shooter info on telemetry
+            telemetry.addData("Shooter Power", "%.3f", calculatedShooterPower);
+            telemetry.addData("Distance", "%.1f*2 in", lastValidDistance);
+            telemetry.addData("Balls", "%d/%d", ballCount, MAX_BALLS);
+            telemetry.update();
         }
     }
 
@@ -211,8 +210,9 @@ public class AutoAimRobot extends LinearOpMode {
         kicker = hardwareMap.get(Servo.class, "kicker");
         kicker.setPosition(KICKER_CLOSED);
 
-        // Sort wheel
-        sortWheel = hardwareMap.get(Servo.class, "sortWheel");
+        // Sort wheel with extended PWM range
+        sortWheel = hardwareMap.get(ServoImplEx.class, "sortWheel");
+        sortWheel.setPwmRange(new PwmControl.PwmRange(500, 2500));
         sortWheel.setPosition(SLOT_0_POSITION);
 
         cs = hardwareMap.get(ColorSensor.class, "cs");
@@ -236,9 +236,6 @@ public class AutoAimRobot extends LinearOpMode {
         for (int i = 0; i < 3; i++) {
             ballSlots[i] = null;
         }
-
-        telemetry.addData("Hardware", "Initialized");
-        telemetry.update();
     }
 
     private void mecanum(double drive, double strafe, double turn) {
@@ -266,17 +263,11 @@ public class AutoAimRobot extends LinearOpMode {
         LLResult result = limelight.getLatestResult();
 
         if (result == null || !result.isValid()) {
-            if (!isShooting) {
-                shooter.setPower(0);
-            }
             return;
         }
 
         List<LLResultTypes.FiducialResult> fiducials = result.getFiducialResults();
         if (fiducials.isEmpty()) {
-            if (!isShooting) {
-                shooter.setPower(0);
-            }
             return;
         }
 
@@ -294,9 +285,14 @@ public class AutoAimRobot extends LinearOpMode {
         double ty = target.getTargetYDegrees();
         double ta = target.getTargetArea();
 
-        double estimatedDistance = 0.55 / ta;
+        // Better distance calculation with safety bounds
+        double estimatedDistance = calculateDistance(ta);
 
-        // YAW SERVO CONTROL (from AutoAimTest)
+        //  calculated shooter power from distance
+        calculatedShooterPower = calculateShooterPower(estimatedDistance);
+        lastValidDistance = estimatedDistance;
+
+        // YAW SERVO CONTROL
         yawPosition += tx * YAW_SERVO_GAIN;
         yawPosition = Math.max(YAW_MIN, Math.min(YAW_MAX, yawPosition));
         turretYaw.setPosition(yawPosition);
@@ -305,31 +301,43 @@ public class AutoAimRobot extends LinearOpMode {
         double pitchPower = Math.max(-TURRET_PITCH_SPEED,
                 Math.min(TURRET_PITCH_SPEED, -ty * TY_GAIN));
         turretPitch.setPower(pitchPower);
+        sleep(400);
+        turretPitch.setPower(0);
 
-        // SHOOTER POWER
-        if (!isShooting) {
-            if (shooterEnabled) {
-                shooter.setPower(calculateShooterPower(estimatedDistance));
-            }
+        //  SHOOTER POWER - uses calculated power and updates if enabled
+        if (shooterEnabled && !isShooting) {
+            shooter.setPower(calculatedShooterPower);
         }
-
-        telemetry.addData("Auto-Aim", "ACTIVE");
-        telemetry.addData("Target ID", (int) target.getFiducialId());
-        telemetry.addData("TX", "%.2f", tx);
-        telemetry.addData("TY", "%.2f", ty);
-        telemetry.addData("Distance", "%.1f in", estimatedDistance);
-        telemetry.addData("Yaw Position", "%.3f", yawPosition);
     }
 
-    private double calculateShooterPower(double distanceInches) {
+    // ✅ NEW: Separate distance calculation with bounds checking
+    private double calculateDistance(double targetArea) {
+        // Prevent division by zero or very small numbers
+        if (targetArea < 0.001) {
+            return lastValidDistance; // Return last known good distance
+        }
+
+        double rawDistance = (0.55 / targetArea) - 12.2047;
+
+        // Clamp to reasonable range (14 to 144 inches)
+        double clampedDistance = Math.max(14.0, Math.min(144.0, rawDistance));
+
+        return clampedDistance;
+    }
+
+    // ✅ FIXED: Better shooter power calculation
+    private double calculateShooterPower(double estimatedDistance) {
         double minPower = 0.57;
         double maxPower = 0.8;
         double minDist = 14;
-        double maxDist = 140;
+        double maxDist = 144;
 
-        distanceInches = Math.max(minDist, Math.min(maxDist, distanceInches));
+        // Distance is already clamped in calculateDistance()
+        // Linear interpolation between min and max power
+        double power = 0.05+minPower + (estimatedDistance - minDist) * (maxPower - minPower) / (maxDist - minDist);
 
-        return minPower + (distanceInches - minDist) * (maxPower - minPower) / (maxDist - minDist);
+        // Extra safety clamp
+        return Math.max(minPower, Math.min(maxPower, power));
     }
 
     private void manualTurretControl() {
@@ -390,13 +398,13 @@ public class AutoAimRobot extends LinearOpMode {
                 ballDetectedInSlot = true;
                 detectionTimer.reset();
 
-                telemetry.addData("DETECTED", detectedColor + " in Slot " + currentSlot);
+                telemetry.addData("Ball Detected", detectedColor + " in Slot " + currentSlot);
                 telemetry.addData("Ball Count", ballCount + "/" + MAX_BALLS);
                 telemetry.update();
 
                 if (ballCount >= MAX_BALLS) {
                     intakeEnabled = false;
-                    telemetry.addData("STATUS", "ALL BALLS LOADED!");
+                    telemetry.addData("Status", "ALL BALLS LOADED");
                     telemetry.update();
                     sleep(375);
                 }
@@ -437,9 +445,6 @@ public class AutoAimRobot extends LinearOpMode {
                 sortWheel.setPosition(SLOT_2_POSITION);
                 break;
         }
-
-        telemetry.addData("sortWheel", "Auto-rotated to Slot " + currentSlot);
-        telemetry.update();
     }
 
     private void resetBalls() {
@@ -453,19 +458,19 @@ public class AutoAimRobot extends LinearOpMode {
         currentSlot = 0;
         sortWheel.setPosition(SLOT_0_POSITION);
 
-        telemetry.addData("RESET", "All balls cleared! Ready for intake");
+        telemetry.addData("Status", "All balls cleared");
         telemetry.update();
         sleep(750);
     }
 
     private void scanAprilTagPattern() {
-        telemetry.addData("Scanning", "Looking for AprilTag pattern...");
+        telemetry.addData("Status", "Scanning for AprilTag pattern...");
         telemetry.update();
 
         LLResult result = limelight.getLatestResult();
 
         if (result == null || !result.isValid()) {
-            telemetry.addData("Error", "No valid data from Limelight");
+            telemetry.addData("Error", "No valid Limelight data");
             telemetry.update();
             sleep(750);
             return;
@@ -500,9 +505,8 @@ public class AutoAimRobot extends LinearOpMode {
             return;
         }
 
-        telemetry.addData("Success!", "MOTIF Pattern loaded from Tag " + detectedAprilTagId);
+        telemetry.addData("Success", "Pattern loaded from Tag " + detectedAprilTagId);
         telemetry.addData("Pattern", getPatternString());
-        telemetry.addData("You need", getPatternRequirements());
         telemetry.update();
         sleep(1500);
     }
@@ -522,7 +526,6 @@ public class AutoAimRobot extends LinearOpMode {
                 targetPattern = null;
         }
     }
-
     private void executeShootSequence() {
         if (isShooting) {
             return;
@@ -535,6 +538,7 @@ public class AutoAimRobot extends LinearOpMode {
 
         telemetry.addData("Starting", "Shoot sequence...");
         telemetry.addData("Pattern Order", getPatternString());
+        telemetry.addData("Shooter Power", "%.3f", calculatedShooterPower);
         telemetry.update();
         sleep(1125);
 
@@ -546,39 +550,55 @@ public class AutoAimRobot extends LinearOpMode {
         int[] shootOrder = new int[3];
         boolean canMatchPattern = true;
 
-        for (int patternIndex = 0; patternIndex < 3; patternIndex++) {
-            String requiredColor = targetPattern[patternIndex];
-            int slotWithRequiredBall = -1;
-
-            for (int slot = 0; slot < 3; slot++) {
-                if (availableBalls[slot] != null && availableBalls[slot].equals(requiredColor)) {
-                    slotWithRequiredBall = slot;
-                    availableBalls[slot] = null;
-                    break;
-                }
-            }
-
-            if (slotWithRequiredBall == -1) {
-                canMatchPattern = false;
-                break;
-            }
-
-            shootOrder[patternIndex] = slotWithRequiredBall;
-        }
-
-        if (!canMatchPattern) {
-            telemetry.addData("WARNING", "Insufficient balls for pattern!");
-            telemetry.addData("Failsafe", "Shooting in slot order: 0→1→2");
+        // ✅ NEW: Check if pattern was detected, if not shoot in default order
+        if (targetPattern == null || !motifDetected) {
+            telemetry.addData("INFO", "No AprilTag pattern detected");
+            telemetry.addData("Default Mode", "Shooting in slot order: 0→1→2");
             telemetry.update();
             sleep(1500);
 
             shootOrder[0] = 0;
             shootOrder[1] = 1;
             shootOrder[2] = 2;
+            canMatchPattern = false; // Skip pattern matching logic
+        } else {
+            // Determine which slot contains each ball we need to shoot
+            for (int patternIndex = 0; patternIndex < 3; patternIndex++) {
+                String requiredColor = targetPattern[patternIndex];
+                int slotWithRequiredBall = -1;
+
+                for (int slot = 0; slot < 3; slot++) {
+                    if (availableBalls[slot] != null && availableBalls[slot].equals(requiredColor)) {
+                        slotWithRequiredBall = slot;
+                        availableBalls[slot] = null;
+                        break;
+                    }
+                }
+
+                if (slotWithRequiredBall == -1) {
+                    canMatchPattern = false;
+                    break;
+                }
+
+                shootOrder[patternIndex] = slotWithRequiredBall;
+            }
+
+            if (!canMatchPattern) {
+                telemetry.addData("WARNING", "Insufficient balls for pattern!");
+                telemetry.addData("Failsafe", "Shooting in slot order: 0→1→2");
+                telemetry.update();
+                sleep(1500);
+
+                shootOrder[0] = 0;
+                shootOrder[1] = 1;
+                shootOrder[2] = 2;
+            }
         }
 
-        // Enable shooter
-        shooter.setPower(0.8);
+        // Enable shooter with calculated power
+        shooter.setPower(calculatedShooterPower);
+        telemetry.addData("Shooter", "Spinning up at %.3f power...", calculatedShooterPower);
+        telemetry.update();
         sleep(1000);
 
         for (int shootIndex = 0; shootIndex < 3; shootIndex++) {
@@ -600,7 +620,8 @@ public class AutoAimRobot extends LinearOpMode {
             telemetry.update();
             sleep(750);
 
-            double shootPosition = getShootPositionForIndex(shootIndex);
+            // Use the slot number to determine the shoot position
+            double shootPosition = getShootPositionForSlot(slotToShoot);
             sortWheel.setPosition(shootPosition);
             sleep(SERVO_MOVE_DELAY * 2);
 
@@ -620,19 +641,21 @@ public class AutoAimRobot extends LinearOpMode {
             telemetry.update();
             sleep(750);
 
-            // **NEW: Open kicker between rotations (except after the last shot)**
-            if (shootIndex < 2) {  // Only do this for the first 2 shots, not after the 3rd
+            // Open kicker between rotations (except after the last shot)
+            if (shootIndex < 2) {
                 kicker.setPosition(KICKER_OPEN);
                 telemetry.addData("Kicker", "Opening for next rotation...");
                 telemetry.update();
-                sleep(300);  // Brief pause with kicker open
+                sleep(300);
 
                 kicker.setPosition(KICKER_CLOSED);
-                sleep(200);  // Brief pause to ensure kicker closes
+                sleep(200);
             }
         }
 
+        // Turn off shooter after sequence
         shooter.setPower(0);
+        shooterEnabled = false;
 
         telemetry.addData("===", "SEQUENCE COMPLETE ===");
         telemetry.update();
@@ -652,128 +675,21 @@ public class AutoAimRobot extends LinearOpMode {
         sleep(1500);
     }
 
-    private double getShootPositionForIndex(int shootIndex) {
-        switch (shootIndex) {
+    private double getShootPositionForSlot(int slotNumber) {
+        switch (slotNumber) {
             case 0:
-                return SHOOT_POSITION_1;
+                return SHOOT_POSITION_0;
             case 1:
-                return SHOOT_POSITION_2;
-            case 2:
-                return SHOOT_POSITION_3;
-            default:
                 return SHOOT_POSITION_1;
+            case 2:
+                return SHOOT_POSITION_2;
+            default:
+                return SHOOT_POSITION_0;
         }
     }
 
     private String getPatternString() {
         if (targetPattern == null) return "None";
         return String.format("[%s, %s, %s]", targetPattern[0], targetPattern[1], targetPattern[2]);
-    }
-
-    private String getPatternRequirements() {
-        if (targetPattern == null) return "Unknown";
-
-        int greenCount = 0;
-        int purpleCount = 0;
-
-        for (String color : targetPattern) {
-            if (color.equals("Green")) greenCount++;
-            else if (color.equals("Purple")) purpleCount++;
-        }
-
-        return greenCount + " Green, " + purpleCount + " Purple";
-    }
-
-    private String getCurrentBallsString() {
-        int greenCount = 0;
-        int purpleCount = 0;
-
-        for (String color : ballSlots) {
-            if (color != null) {
-                if (color.equals("Green")) greenCount++;
-                else if (color.equals("Purple")) purpleCount++;
-            }
-        }
-
-        return greenCount + " Green, " + purpleCount + " Purple";
-    }
-
-    private boolean canFulfillPattern() {
-        if (targetPattern == null) return false;
-
-        String[] availableBalls = new String[3];
-        for (int i = 0; i < 3; i++) {
-            availableBalls[i] = ballSlots[i];
-        }
-
-        for (int patternIndex = 0; patternIndex < 3; patternIndex++) {
-            String requiredColor = targetPattern[patternIndex];
-            boolean foundColor = false;
-
-            for (int slot = 0; slot < 3; slot++) {
-                if (availableBalls[slot] != null && availableBalls[slot].equals(requiredColor)) {
-                    availableBalls[slot] = null;
-                    foundColor = true;
-                    break;
-                }
-            }
-
-            if (!foundColor) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private void updateTelemetry() {
-        telemetry.addData("Status", "Running: " + runtime.toString());
-
-        telemetry.addData("---", "TURRET & AUTO-AIM");
-        telemetry.addData("Auto-Aim", autoAimEnabled ? "ENABLED" : "Disabled");
-        telemetry.addData("Yaw Servo", "%.3f", yawPosition);
-        telemetry.addData("Pitch Encoder", turretPitch.getCurrentPosition());
-        telemetry.addData("Shooter Power", "%.2f", shooter.getPower());
-
-        telemetry.addData("---", "INTAKE SYSTEM");
-        telemetry.addData("Current Slot", currentSlot);
-        telemetry.addData("Ball Count", ballCount + "/" + MAX_BALLS);
-        telemetry.addData("Intake", intakeEnabled ? "ACTIVE" : "FULL - DISABLED");
-        telemetry.addData("Intake Motor", roller.getPower() > 0 ? "RUNNING" : "STOPPED");
-
-        if (inCooldown) {
-            telemetry.addData("Detection", "COOLDOWN (" + (int)(DETECTION_COOLDOWN - cooldownTimer.milliseconds()) + "ms)");
-        } else {
-            telemetry.addData("Detection", "READY");
-        }
-
-        telemetry.addData("---", "COLOR SENSOR");
-        telemetry.addData("Red", cs.red());
-        telemetry.addData("Green", cs.green());
-        telemetry.addData("Blue", cs.blue());
-
-        telemetry.addData("---", "BALL STORAGE");
-        telemetry.addData("Slot 0", ballSlots[0] != null ? ballSlots[0] : "Empty");
-        telemetry.addData("Slot 1", ballSlots[1] != null ? ballSlots[1] : "Empty");
-        telemetry.addData("Slot 2", ballSlots[2] != null ? ballSlots[2] : "Empty");
-
-        telemetry.addData("---", "TARGET PATTERN");
-        if (motifDetected && targetPattern != null) {
-            telemetry.addData("MOTIF Status", "DETECTED!");
-            telemetry.addData("OBELISK Tag ID", detectedAprilTagId);
-            telemetry.addData("MOTIF Pattern", getPatternString());
-            telemetry.addData("Need", getPatternRequirements());
-            telemetry.addData("Have", getCurrentBallsString());
-            telemetry.addData("Can Shoot?", canFulfillPattern() ? "YES" : "NO - Wrong colors!");
-        } else {
-            telemetry.addData("MOTIF Status", "NOT DETECTED");
-            telemetry.addData("Action", "Press DPad Down to scan MOTIF");
-        }
-
-        telemetry.addData("---", "STATUS");
-        telemetry.addData("Shooting", isShooting ? "YES" : "NO");
-        telemetry.addData("Kicker", kicker.getPosition() > 0.5 ? "OPEN" : "CLOSED");
-
-        telemetry.update();
     }
 }

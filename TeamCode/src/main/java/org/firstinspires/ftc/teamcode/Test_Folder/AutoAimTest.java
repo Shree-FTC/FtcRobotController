@@ -143,7 +143,7 @@ public class AutoAimTest extends LinearOpMode {
         telemetry.addData("Distance", estimatedDistance);
     }
 
-    private double calculateShooterPower(double distanceInches) {
+   private double calculateShooterPower(double distanceInches) {
         double minPower = 0.57;
         double maxPower = 0.8;
         double minDist = 14;
