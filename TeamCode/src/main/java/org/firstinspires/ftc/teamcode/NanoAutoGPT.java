@@ -15,7 +15,7 @@ import com.qualcomm.robotcore.hardware.ServoImplEx;
 import java.util.List;
 
 @Autonomous(name="AutoAimAutonomous", group="Competition")
-public class NanoAuto extends LinearOpMode {
+public class NanoAutoGPT  extends LinearOpMode {
     private DcMotor frontLeft, frontRight, backLeft, backRight;
     private DcMotorEx shooter;
     private DcMotor roller, turretPitch;
